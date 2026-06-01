@@ -1,11 +1,8 @@
 use crate::util::{
-    constants::{self, PACKAGES_PARQUET},
-    net::{Download, download_files},
+    constants::{self},
+    net::Download,
 };
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, io::ErrorKind};
 
 use crate::util::net;
 use cps_common::errors::CpsiError;
@@ -22,7 +19,18 @@ impl RepositoryConfig {
     pub fn load_repositories() -> Result<Vec<RepositoryConfig>, CpsiError> {
         let mut repositories: Vec<RepositoryConfig> = Vec::new();
 
-        for entry in fs::read_dir(constants::REPOSITORIES_CONFIG_DIRECTORY)? {
+        let read_dir = match fs::read_dir(constants::REPOSITORIES_CONFIG_DIRECTORY) {
+            Ok(o) => o,
+            Err(e) => {
+                if e.kind() == ErrorKind::NotFound {
+                    return Err(CpsiError::NoRepositories);
+                } else {
+                    return Err(CpsiError::Io(e));
+                }
+            }
+        };
+
+        for entry in read_dir {
             let entry_path = entry?.path();
 
             if !entry_path.extension().is_some_and(|f| f == "toml") {
@@ -67,4 +75,3 @@ pub async fn sync() -> Result<(), CpsiError> {
 
     Ok(())
 }
-
