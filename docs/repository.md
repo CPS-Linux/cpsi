@@ -11,9 +11,7 @@ cpsi update
 ## 更新時の動作
 
 ```text
-Packages.zst
-↓
-展開
+download: Packages.parquet, Packages.parquet.minisign
 ↓
 Packages.parquet
 ↓
