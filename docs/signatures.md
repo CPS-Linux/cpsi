@@ -20,23 +20,7 @@ Ed25519
 
 ```text
 *.clos
-```
-
-## 非署名対象
-
-現時点では以下を署名対象にしません。
-
-```text
 Packages.parquet
-Packages.zst
-```
-
-## 将来的検討事項
-
-将来的に以下の署名を追加する可能性があります。
-
-```text
-Packages.zst.minisig
 ```
 
 理由:
