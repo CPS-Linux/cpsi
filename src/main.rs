@@ -31,6 +31,15 @@ enum SubCommands {
         /// Repository prefix to update.
         prefix: Option<String>,
     },
+    Repo {
+        #[command(subcommand)]
+        repo: RepoSubcommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RepoSubcommand {
+    Add { url: String },
 }
 
 #[tokio::main]
@@ -51,5 +60,14 @@ async fn main() {
                 eprintln!("{}", e.to_string());
             }
         }
+        SubCommands::Repo { repo } => match repo {
+            RepoSubcommand::Add { url } => tokio::task::spawn_blocking(|| {
+                if let Err(e) = cli::repo::add_repository(url) {
+                    eprintln!("Failed to add repository: {}", e);
+                }
+            })
+            .await
+            .unwrap(),
+        },
     }
 }

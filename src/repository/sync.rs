@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RepositoryConfig {
-    name: String,
+    repo_name: String,
     url: String,
     public_key: String,
 }
@@ -59,14 +59,17 @@ pub async fn sync() -> Result<(), CpsiError> {
     }
 
     for repo in repositories {
-        downloads.push(Download::new(
-            repo.url,
-            format!(
-                "{}/{}.parquet",
-                constants::REPOSITORIES_DIRECTORY,
-                repo.name
-            ),
-        ));
+        downloads.push(
+            Download::new(
+                format!("{}/Packages.parquet", repo.url),
+                format!(
+                    "{}/{}.parquet",
+                    constants::REPOSITORIES_DIRECTORY,
+                    repo.repo_name
+                ),
+            )
+            .with_label(repo.repo_name),
+        );
     }
 
     if let Err(e) = net::download_files(downloads).await {

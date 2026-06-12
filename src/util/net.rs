@@ -1,8 +1,8 @@
 use futures_util::{StreamExt, TryStreamExt, stream};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, StatusCode, blocking::Client as BlockingClient};
 use std::{
-    io,
+    fs as std_fs, io,
     path::{Path, PathBuf},
 };
 use thiserror::Error;
@@ -85,7 +85,7 @@ where
             let client = client.clone();
             let multi = multi.clone();
             async move {
-                download_file(client, multi, download)
+                download_file_with_progress(client, multi, download)
                     .await
                     .map(|path| (index, path))
             }
@@ -99,7 +99,41 @@ where
     Ok(completed.into_iter().map(|(_, path)| path).collect())
 }
 
-async fn download_file(
+pub fn download_file(download: Download) -> Result<PathBuf, NetError> {
+    let client = BlockingClient::new();
+    let mut response = client
+        .get(&download.url)
+        .send()
+        .map_err(|source| NetError::Request {
+            url: download.url.clone(),
+            source,
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(NetError::HttpStatus {
+            url: download.url,
+            status,
+        });
+    }
+
+    if let Some(parent) = download
+        .destination
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        std_fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
+    }
+
+    let mut file = std_fs::File::create(&download.destination)
+        .map_err(|source| io_error(&download.destination, source))?;
+    io::copy(&mut response, &mut file).map_err(|source| io_error(&download.destination, source))?;
+    io::Write::flush(&mut file).map_err(|source| io_error(&download.destination, source))?;
+
+    Ok(download.destination)
+}
+
+async fn download_file_with_progress(
     client: Client,
     multi: MultiProgress,
     download: Download,
@@ -165,7 +199,7 @@ async fn download_file(
         .map_err(|source| io_error(&download.destination, source))?;
 
     progress.finish_with_message(format!(
-        "done {}",
+        "{}",
         download
             .label
             .unwrap_or_else(|| download.destination.display().to_string())
