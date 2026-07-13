@@ -6,7 +6,13 @@ CPSI はリポジトリインデックスとして `Packages.parquet` を使用�
 
 ```bash
 cpsi update
+cpsi update core
 ```
+
+引数を省略すると、登録済みの全リポジトリを更新します。`PREFIX` を指定すると、
+リポジトリ名がその文字列から始まるリポジトリだけを更新します。たとえば
+`cpsi update core` は `core` と `core-testing` を更新します。一致する
+リポジトリがない場合はエラーになります。
 
 ## 更新時の動作
 

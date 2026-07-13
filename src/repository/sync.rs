@@ -125,6 +125,17 @@ pub async fn sync() -> Result<(), CpsiError> {
     .await
 }
 
+/// Synchronize every configured repository whose name starts with `prefix`.
+pub async fn sync_prefix(prefix: &str) -> Result<(), CpsiError> {
+    sync_prefix_with_paths(
+        prefix,
+        Path::new(constants::REPOSITORIES_CONFIG_DIRECTORY),
+        Path::new(constants::PUBLIC_KEYS_DIRECTORY),
+        Path::new(constants::REPOSITORIES_DIRECTORY),
+    )
+    .await
+}
+
 /// Synchronize repositories using explicit configuration, key, and cache paths.
 pub async fn sync_with_paths(
     config_dir: &Path,
@@ -133,6 +144,52 @@ pub async fn sync_with_paths(
 ) -> Result<(), CpsiError> {
     let repositories = RepositoryConfig::load_repositories_from(config_dir)?;
     sync_repositories_to(repositories, keys_dir, cache_dir).await
+}
+
+/// Synchronize repositories matching `prefix` using explicit paths.
+pub async fn sync_prefix_with_paths(
+    prefix: &str,
+    config_dir: &Path,
+    keys_dir: &Path,
+    cache_dir: &Path,
+) -> Result<(), CpsiError> {
+    let repositories = RepositoryConfig::load_repositories_from(config_dir)?;
+    let repositories = select_repositories_by_prefix(repositories, prefix)?;
+    sync_repositories_to(repositories, keys_dir, cache_dir).await
+}
+
+fn select_repositories_by_prefix(
+    repositories: Vec<RepositoryConfig>,
+    prefix: &str,
+) -> Result<Vec<RepositoryConfig>, CpsiError> {
+    validate_repository_prefix(prefix)?;
+
+    let repositories: Vec<_> = repositories
+        .into_iter()
+        .filter(|repository| repository.repo_name.starts_with(prefix))
+        .collect();
+
+    if repositories.is_empty() {
+        Err(CpsiError::RepositoryNotFound(prefix.to_string()))
+    } else {
+        Ok(repositories)
+    }
+}
+
+fn validate_repository_prefix(prefix: &str) -> Result<(), CpsiError> {
+    let valid = !prefix.is_empty()
+        && prefix
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+
+    if valid {
+        Ok(())
+    } else {
+        Err(CpsiError::Io(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("invalid repository prefix: {prefix}"),
+        )))
+    }
 }
 
 /// Synchronize an already loaded set of repository configurations.
@@ -383,6 +440,13 @@ mod tests {
         }
     }
 
+    fn named_repository(repo_name: &str) -> RepositoryConfig {
+        RepositoryConfig {
+            repo_name: repo_name.to_string(),
+            ..repository(true)
+        }
+    }
+
     #[test]
     fn loads_old_configs_as_trusted_and_skips_non_toml_files() {
         let dir = temp_directory("config");
@@ -421,6 +485,45 @@ mod tests {
             Err(CpsiError::RepositoryNotFound(name)) if name == "missing"
         ));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn selects_every_repository_matching_prefix() {
+        let selected = select_repositories_by_prefix(
+            vec![
+                named_repository("core"),
+                named_repository("core-testing"),
+                named_repository("extra"),
+            ],
+            "core",
+        )
+        .unwrap();
+
+        assert_eq!(
+            selected
+                .iter()
+                .map(|repository| repository.repo_name.as_str())
+                .collect::<Vec<_>>(),
+            ["core", "core-testing"]
+        );
+    }
+
+    #[test]
+    fn reports_missing_or_invalid_repository_prefix() {
+        assert!(matches!(
+            select_repositories_by_prefix(vec![named_repository("core")], "missing"),
+            Err(CpsiError::RepositoryNotFound(prefix)) if prefix == "missing"
+        ));
+        assert!(select_repositories_by_prefix(vec![named_repository("core")], "../core").is_err());
+        assert!(select_repositories_by_prefix(vec![named_repository("core")], "").is_err());
+    }
+
+    #[test]
+    fn accepts_prefixes_that_are_only_partial_repository_names() {
+        let selected =
+            select_repositories_by_prefix(vec![named_repository(".hidden")], ".").unwrap();
+
+        assert_eq!(selected[0].repo_name, ".hidden");
     }
 
     #[test]

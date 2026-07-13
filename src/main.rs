@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use cpsi::cli;
 use cps_common::errors::CpsiError;
+use cpsi::cli;
 use std::process::ExitCode;
 
 #[derive(Parser, Debug)]
@@ -92,10 +92,7 @@ async fn dispatch(command_line: Cli) -> Result<(), CpsiError> {
             run_blocking(move || cli::upgrade::upgrade(&packages)).await
         }
         SubCommands::Info { package } => run_blocking(move || cli::info::info(&package)).await,
-        SubCommands::Update { prefix } => {
-            _ = prefix;
-            cli::update::update().await
-        }
+        SubCommands::Update { prefix } => cli::update::update_with_prefix(prefix.as_deref()).await,
         SubCommands::Repo { repo } => match repo {
             RepoSubcommand::Add { url, insecure } => {
                 run_blocking(move || cli::repo::add_repository_with_options(url, insecure)).await
@@ -194,6 +191,15 @@ mod tests {
             update.subcommand,
             SubCommands::Update { prefix } if prefix.as_deref() == Some("core")
         ));
+
+        let update_all = Cli::try_parse_from(["cpsi", "update"]).unwrap();
+        assert!(matches!(
+            update_all.subcommand,
+            SubCommands::Update { prefix: None }
+        ));
+
+        let error = Cli::try_parse_from(["cpsi", "update", "core", "extra"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 
     #[test]
