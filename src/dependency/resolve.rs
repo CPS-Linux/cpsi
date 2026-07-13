@@ -2,7 +2,11 @@ use std::collections::HashSet;
 
 use crate::repository::parquet::Repository;
 
-use cps_common::{dependency::Dependency, errors::CpsiError, package::Package};
+use cps_common::{
+    dependency::{ComparisonOperator, Dependency},
+    errors::CpsiError,
+    package::Package,
+};
 
 /// Resolve package dependencies in install order.
 ///
@@ -28,10 +32,10 @@ pub fn resolve<'a>(
 
 /// Resolve package names against the repository, then resolve their
 /// dependencies in install order.
-pub fn resolve_names<'a, I, S>(
+pub fn resolve_names<I, S>(
     package_names: I,
-    repository: &'a Repository,
-) -> Result<Vec<&'a Package>, CpsiError>
+    repository: &Repository,
+) -> Result<Vec<&Package>, CpsiError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -79,15 +83,24 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve_dependency(&self, dependency: &Dependency) -> Result<&'a Package, CpsiError> {
-        if let Some(package) = self.repository.find_package(&dependency.name) {
-            if dependency_is_satisfied(package, dependency) {
-                return Ok(package);
-            }
+        if let Some(package) = self.repository.find_package(&dependency.name)
+            && crate::repository::parquet::supports_architecture(
+                package,
+                self.repository.architecture(),
+            ) && dependency_is_satisfied(package, dependency)
+        {
+            return Ok(package);
         }
 
         let candidates: Vec<_> = self
             .repository
             .packages()
+            .filter(|package| {
+                crate::repository::parquet::supports_architecture(
+                    package,
+                    self.repository.architecture(),
+                )
+            })
             .filter(|package| package.provides.iter().any(|name| name == &dependency.name))
             .filter(|package| dependency_is_satisfied(package, dependency))
             .collect();
@@ -113,16 +126,111 @@ impl<'a> Resolver<'a> {
     }
 }
 
-fn dependency_is_satisfied(package: &Package, dependency: &Dependency) -> bool {
-    dependency
-        .min_version
-        .as_ref()
-        .is_none_or(|min_version| &package.version >= min_version)
+pub fn dependency_is_satisfied(package: &Package, dependency: &Dependency) -> bool {
+    let Some(required) = dependency.version.as_ref() else {
+        return dependency.operator.is_none();
+    };
+
+    match dependency.operator.unwrap_or(ComparisonOperator::Gte) {
+        ComparisonOperator::Eq => &package.version == required,
+        ComparisonOperator::Gt => &package.version > required,
+        ComparisonOperator::Gte => &package.version >= required,
+        ComparisonOperator::Lt => &package.version < required,
+        ComparisonOperator::Lte => &package.version <= required,
+    }
 }
 
 fn format_dependency(dependency: &Dependency) -> String {
-    match &dependency.min_version {
-        Some(version) => format!("{}>={}", dependency.name, version.to_string()),
-        None => dependency.name.clone(),
+    dependency.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cps_common::{architecture::Architecture, version::Version};
+
+    fn package(name: &str, version: &str) -> Package {
+        Package {
+            name: name.to_string(),
+            version: Version::from(version),
+            release: 1,
+            arch: vec![Architecture::X86_64],
+            dependencies: Vec::new(),
+            description: String::new(),
+            provides: Vec::new(),
+            license: String::new(),
+            package_size: 0,
+            installed_size: 0,
+            repository: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn supports_every_comparison_operator_at_boundaries() {
+        let package = package("lib", "2.0.0");
+
+        for (operator, version, expected) in [
+            (ComparisonOperator::Eq, "2.0.0", true),
+            (ComparisonOperator::Eq, "2.0.1", false),
+            (ComparisonOperator::Gt, "1.9.9", true),
+            (ComparisonOperator::Gt, "2.0.0", false),
+            (ComparisonOperator::Gte, "2.0.0", true),
+            (ComparisonOperator::Gte, "2.0.1", false),
+            (ComparisonOperator::Lt, "2.0.1", true),
+            (ComparisonOperator::Lt, "2.0.0", false),
+            (ComparisonOperator::Lte, "2.0.0", true),
+            (ComparisonOperator::Lte, "1.9.9", false),
+        ] {
+            let dependency = Dependency {
+                name: "lib".to_string(),
+                version: Some(Version::from(version)),
+                operator: Some(operator),
+            };
+            assert_eq!(
+                dependency_is_satisfied(&package, &dependency),
+                expected,
+                "{operator}{version}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolves_dependencies_before_targets() {
+        let dependency = Dependency {
+            name: "lib".to_string(),
+            version: Some(Version::from("1.0.0")),
+            operator: Some(ComparisonOperator::Gte),
+        };
+        let lib = package("lib", "1.0.0");
+        let mut app = package("app", "1.0.0");
+        app.dependencies.push(dependency);
+        let repository =
+            Repository::from_packages_for_arch(vec![app, lib], Architecture::X86_64).unwrap();
+
+        let resolved = resolve_names(["app"], &repository).unwrap();
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|package| package.name.as_str())
+                .collect::<Vec<_>>(),
+            ["lib", "app"]
+        );
+    }
+
+    #[test]
+    fn resolves_single_provider() {
+        let mut provider = package("busybox", "1.0.0");
+        provider.provides.push("shell".to_string());
+        let mut app = package("app", "1.0.0");
+        app.dependencies.push(Dependency {
+            name: "shell".to_string(),
+            version: None,
+            operator: None,
+        });
+        let repository =
+            Repository::from_packages_for_arch(vec![app, provider], Architecture::X86_64).unwrap();
+
+        let resolved = resolve_names(["app"], &repository).unwrap();
+        assert_eq!(resolved[0].name, "busybox");
     }
 }

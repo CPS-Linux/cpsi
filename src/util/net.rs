@@ -198,12 +198,11 @@ async fn download_file_with_progress(
         .await
         .map_err(|source| io_error(&download.destination, source))?;
 
-    progress.finish_with_message(format!(
-        "{}",
+    progress.finish_with_message(
         download
             .label
-            .unwrap_or_else(|| download.destination.display().to_string())
-    ));
+            .unwrap_or_else(|| download.destination.display().to_string()),
+    );
 
     Ok(download.destination)
 }
